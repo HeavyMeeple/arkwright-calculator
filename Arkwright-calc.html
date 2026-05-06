@@ -371,18 +371,22 @@ function recalcGood(g){
     var q=Math.min(6,Math.max(0,getInt("q-"+g+"-"+p)));
     var m2=Math.min(6,Math.max(0,getInt("m-"+g+"-"+p)));
     var sale=Math.max(0,Math.min(20,getInt("s-"+g+"-"+p,0)));
-    var sale=getNum("s-"+g+"-"+p,0);
     var appeal=Math.max(0,f+q+m2-sale);
     setText("ap-"+g+"-"+p,appeal);
     var wk=Math.max(0,getInt("wk-"+g+"-"+p));
     var mc2=Math.max(0,getInt("mc-"+g+"-"+p));
     var wh=Math.max(0,getInt("wh-"+g+"-"+p));
     var prod=getInt("pq-"+g+"-"+p,0);
-    players.push({p:p,appeal:appeal,prod:prod,wh:wh,sale:sale,wk:wk,mc:mc2});
+    players.push({p:p,appeal:appeal,qual:f+q,prod:prod,wh:wh,sale:sale,wk:wk,mc:mc2});
   }
   /* demand allocation */
-  if(niA>0) players.push({p:0,appeal:niA,prod:999999,wh:0,sale:0,wk:0,mc:0,ni:true});
-  players.sort(function(a,b){return b.appeal-a.appeal;});
+  if(niA>0) players.push({p:0,appeal:niA,qual:-1,prod:999999,wh:0,sale:0,wk:0,mc:0,ni:true});
+  /* tiebreak: i) appeal desc  ii) players before NI  iii) qual (f+q) desc */
+  function sellOrder(a,b){
+    if(b.appeal!==a.appeal) return b.appeal-a.appeal;
+    if(!!a.ni!==!!b.ni) return a.ni?1:-1;
+    return b.qual-a.qual;
+  }
   var sold={}, rem=demand;
   var maxA=0;
   for(var ii=0;ii<players.length;ii++) if(players[ii].appeal>maxA) maxA=players[ii].appeal;
@@ -391,12 +395,36 @@ function recalcGood(g){
     var elig=[];
     for(var ei=0;ei<players.length;ei++) if(players[ei].appeal>=lvl) elig.push(players[ei]);
     if(!elig.length) continue;
+    elig.sort(sellOrder);
     var cells=[];
-    for(var ci=0;ci<elig.length;ci++){
-      var pl=elig[ci]; var sv=(sold[pl.p]||0);
-      if(pl.prod+pl.wh-sv<=0){ cells.push({p:pl.p,st:"stop"}); }
-      else if(rem<=0){ cells.push({p:pl.p,st:"denied"}); }
-      else { sold[pl.p]=sv+1; rem--; cells.push({p:pl.p,st:"sold"}); }
+    var ci=0;
+    while(ci<elig.length){
+      var pl=elig[ci];
+      /* find truly-tied group: same appeal, same qual, all non-NI (rule iv) */
+      var ge=ci+1;
+      if(!pl.ni){
+        while(ge<elig.length&&!elig[ge].ni&&
+              elig[ge].appeal===pl.appeal&&elig[ge].qual===pl.qual) ge++;
+      }
+      if(ge-ci>1){
+        /* rule iv: if demand remains, ALL tied players sell (may exceed demand) */
+        if(rem<=0){
+          for(var gi=ci;gi<ge;gi++) cells.push({p:elig[gi].p,st:"denied"});
+        } else {
+          for(var gi=ci;gi<ge;gi++){
+            var gpl=elig[gi]; var gsv=sold[gpl.p]||0;
+            if(gpl.prod+gpl.wh-gsv<=0){ cells.push({p:gpl.p,st:"stop"}); }
+            else { sold[gpl.p]=gsv+1; rem--; cells.push({p:gpl.p,st:"sold"}); }
+          }
+        }
+      } else {
+        /* single entity: normal priority */
+        var sv=sold[pl.p]||0;
+        if(pl.prod+pl.wh-sv<=0){ cells.push({p:pl.p,st:"stop"}); }
+        else if(rem<=0){ cells.push({p:pl.p,st:"denied"}); }
+        else { sold[pl.p]=sv+1; rem--; cells.push({p:pl.p,st:"sold"}); }
+      }
+      ci=ge;
     }
     traceRows.push({lvl:lvl,cells:cells,remAfter:rem});
     if(rem<=0) break;
@@ -446,7 +474,7 @@ function renderResults(g,totalDemand,used,traceRows,rows,players){
   var fc=pct>90?"crit":pct>60?"warn":"";
   getEl("dviz-"+g).innerHTML='<div class="dv"><span class="dv-lbl">Demand used</span><div class="dv-bar"><div class="dv-fill '+fc+'" style="width:'+pct+'%"></div></div><span class="dv-lbl">'+used+' / '+totalDemand+'</span></div>';
   /* trace */
-  var sp=players.slice().sort(function(a,b){return b.appeal-a.appeal;});
+  var sp=players.slice().sort(function(a,b){if(b.appeal!==a.appeal)return b.appeal-a.appeal;if(!!a.ni!==!!b.ni)return a.ni?1:-1;return b.qual-a.qual;});
   var th='<tr><th class="thdk">Appeal</th>';
   for(var i=0;i<sp.length;i++){
     if(sp[i].ni) th+='<th style="color:var(--gold);font-style:italic">Neutral<br>Importer</th>';
